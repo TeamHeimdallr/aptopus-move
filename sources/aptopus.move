@@ -147,6 +147,9 @@ module aptopus::soulbound_token {
     /// Withdraw proof expires
     const EWITHDRAW_PROOF_EXPIRES: u64 = 39;
 
+    /// Token transfer is not allowed for soulbound token
+    const ETOKEN_IS_LOCKED: u64 = 40;
+
     //
     // Core data structures for holding tokens
     //
@@ -158,6 +161,8 @@ module aptopus::soulbound_token {
         /// when property_version = 0, the token_properties are the same as default_properties in TokenData, we don't store it.
         /// when the property_map mutates, a new property_version is assigned to the token.
         token_properties: PropertyMap,
+        /// control if token is locked
+        locked: bool,
     }
 
     /// global unique identifier of a token
@@ -230,6 +235,7 @@ module aptopus::soulbound_token {
         direct_transfer: bool,
         deposit_events: EventHandle<DepositEvent>,
         withdraw_events: EventHandle<WithdrawEvent>,
+        withdraw_for_burn_events: EventHandle<WithdrawForBurnEvent>,
         burn_events: EventHandle<BurnTokenEvent>,
         mutate_token_property_events: EventHandle<MutateTokenPropertyMapEvent>,
     }
@@ -286,6 +292,12 @@ module aptopus::soulbound_token {
 
     /// Set of data sent to the event stream during a withdrawal
     struct WithdrawEvent has drop, store {
+        id: TokenId,
+        amount: u64,
+    }
+
+    /// Set of data sent to the event stream during a withdrawal for burnning token purpose
+    struct WithdrawForBurnEvent has drop, store {
         id: TokenId,
         amount: u64,
     }
@@ -360,8 +372,9 @@ module aptopus::soulbound_token {
     }
 
     /// create token with raw inputs
-    public entry fun create_token_script(
+    public entry fun create_soulbound_token_script(
         account: &signer,
+        owner: address,
         collection: String,
         name: String,
         description: String,
@@ -393,8 +406,9 @@ module aptopus::soulbound_token {
             property_types
         );
 
-        mint_token(
+        mint_token_to(
             account,
+            owner,
             tokendata_id,
             balance,
         );
@@ -532,7 +546,7 @@ module aptopus::soulbound_token {
         assert!(burn_by_creator_flag, error::permission_denied(ECREATOR_CANNOT_BURN_TOKEN));
 
         // Burn the tokens.
-        let Token { id: _, amount: burned_amount, token_properties: _ } = withdraw_with_event_internal(owner, token_id, amount);
+        let Token { id: _, amount: burned_amount, token_properties: _, locked: _ } = withdraw_for_burn_with_event_internal(owner, token_id, amount);
         let token_store = borrow_global_mut<TokenStore>(owner);
         event::emit_event<BurnTokenEvent>(
             &mut token_store.burn_events,
@@ -598,7 +612,7 @@ module aptopus::soulbound_token {
         assert!(burn_by_owner_flag, error::permission_denied(EOWNER_CANNOT_BURN_TOKEN));
 
         // Burn the tokens.
-        let Token { id: _, amount: burned_amount, token_properties: _ } = withdraw_token(owner, token_id, amount);
+        let Token { id: _, amount: burned_amount, token_properties: _, locked: _ } = withdraw_for_burn_token(owner, token_id, amount);
         let token_store = borrow_global_mut<TokenStore>(signer::address_of(owner));
         event::emit_event<BurnTokenEvent>(
             &mut token_store.burn_events,
@@ -808,7 +822,7 @@ module aptopus::soulbound_token {
 
         // check if the property_version is 0 to determine if we need to update the property_version
         if (token_id.property_version == 0) {
-            let token = withdraw_with_event_internal(token_owner, token_id, 1);
+            let token = withdraw_for_burn_with_event_internal(token_owner, token_id, 1);
             // give a new property_version for each token
             let cur_property_version = token_data.largest_property_version + 1;
             let new_token_id = create_token_id(token_id.token_data_id, cur_property_version);
@@ -816,6 +830,7 @@ module aptopus::soulbound_token {
                 id: new_token_id,
                 amount: 1,
                 token_properties: *&token_data.default_properties,
+                locked: true,
             };
             direct_deposit(token_owner, new_token);
             update_token_property_internal(token_owner, new_token_id, keys, values, types);
@@ -832,7 +847,7 @@ module aptopus::soulbound_token {
 
             token_data.largest_property_version = cur_property_version;
             // burn the orignial property_version 0 token after mutation
-            let Token { id: _, amount: _, token_properties: _ } = token;
+            let Token { id: _, amount: _, token_properties: _, locked: _ } = token;
             new_token_id
         } else {
             // only 1 copy for the token with property verion bigger than 0
@@ -894,6 +909,7 @@ module aptopus::soulbound_token {
                     direct_transfer: false,
                     deposit_events: account::new_event_handle<DepositEvent>(account),
                     withdraw_events: account::new_event_handle<WithdrawEvent>(account),
+                    withdraw_for_burn_events: account::new_event_handle<WithdrawForBurnEvent>(account),
                     burn_events: account::new_event_handle<BurnTokenEvent>(account),
                     mutate_token_property_events: account::new_event_handle<MutateTokenPropertyMapEvent>(account),
                 },
@@ -904,7 +920,7 @@ module aptopus::soulbound_token {
     public fun merge(dst_token: &mut Token, source_token: Token) {
         assert!(&dst_token.id == &source_token.id, error::invalid_argument(EINVALID_TOKEN_MERGE));
         dst_token.amount = dst_token.amount + source_token.amount;
-        let Token { id: _, amount: _, token_properties: _ } = source_token;
+        let Token { id: _, amount: _, token_properties: _, locked: _ } = source_token;
     }
 
     public fun split(dst_token: &mut Token, amount: u64): Token {
@@ -916,6 +932,7 @@ module aptopus::soulbound_token {
             id: dst_token.id,
             amount,
             token_properties: property_map::empty(),
+            locked: dst_token.locked,
         }
     }
 
@@ -1007,6 +1024,15 @@ module aptopus::soulbound_token {
     ): Token acquires TokenStore {
         let account_addr = signer::address_of(account);
         withdraw_with_event_internal(account_addr, id, amount)
+    }
+
+    public fun withdraw_for_burn_token(
+        account: &signer,
+        id: TokenId,
+        amount: u64,
+    ): Token acquires TokenStore {
+        let account_addr = signer::address_of(account);
+        withdraw_for_burn_with_event_internal(account_addr, id, amount)
     }
 
     /// Create a new collection to hold tokens
@@ -1284,6 +1310,7 @@ module aptopus::soulbound_token {
                 id: token_id,
                 amount,
                 token_properties: property_map::empty(), // same as default properties no need to store
+                locked: true,
             }
         );
 
@@ -1328,6 +1355,7 @@ module aptopus::soulbound_token {
                 id: token_id,
                 amount,
                 token_properties: property_map::empty(), // same as default properties no need to store
+                locked: true,
             }
         );
     }
@@ -1370,6 +1398,18 @@ module aptopus::soulbound_token {
             table::borrow(&token_store.tokens, id).amount
         } else {
             0
+        }
+    }
+
+    public fun is_locked(owner: address, id: TokenId): bool acquires TokenStore {
+        if (!exists<TokenStore>(owner)) {
+            return true
+        };
+        let token_store = borrow_global<TokenStore>(owner);
+        if (table::contains(&token_store.tokens, id)) {
+            table::borrow(&token_store.tokens, id).locked
+        } else {
+            true
         }
     }
 
@@ -1571,6 +1611,8 @@ module aptopus::soulbound_token {
         id: TokenId,
         amount: u64,
     ): Token acquires TokenStore {
+        // Make sure the token is not locked
+        assert!(!is_locked(account_addr, id), error::permission_denied(ETOKEN_IS_LOCKED));
         // It does not make sense to withdraw 0 tokens.
         assert!(amount > 0, error::invalid_argument(EWITHDRAW_ZERO));
         // Make sure the account has sufficient tokens to withdraw.
@@ -1595,7 +1637,42 @@ module aptopus::soulbound_token {
         let balance = &mut table::borrow_mut(tokens, id).amount;
         if (*balance > amount) {
             *balance = *balance - amount;
-            Token { id, amount, token_properties: property_map::empty() }
+            Token { id, amount, token_properties: property_map::empty(), locked: false }
+        } else {
+            table::remove(tokens, id)
+        }
+    }
+
+    fun withdraw_for_burn_with_event_internal(
+        account_addr: address,
+        id: TokenId,
+        amount: u64,
+    ): Token acquires TokenStore {
+        // It does not make sense to withdraw 0 tokens.
+        assert!(amount > 0, error::invalid_argument(EWITHDRAW_ZERO));
+        // Make sure the account has sufficient tokens to withdraw.
+        assert!(balance_of(account_addr, id) >= amount, error::invalid_argument(EINSUFFICIENT_BALANCE));
+
+        assert!(
+            exists<TokenStore>(account_addr),
+            error::not_found(ETOKEN_STORE_NOT_PUBLISHED),
+        );
+
+        let token_store = borrow_global_mut<TokenStore>(account_addr);
+        event::emit_event<WithdrawForBurnEvent>(
+            &mut token_store.withdraw_for_burn_events,
+            WithdrawForBurnEvent { id, amount },
+        );
+        let tokens = &mut borrow_global_mut<TokenStore>(account_addr).tokens;
+        assert!(
+            table::contains(tokens, id),
+            error::not_found(ENO_TOKEN_IN_TOKEN_STORE),
+        );
+        // balance > amount and amount > 0 indirectly asserted that balance > 0.
+        let balance = &mut table::borrow_mut(tokens, id).amount;
+        if (*balance > amount) {
+            *balance = *balance - amount;
+            Token { id, amount, token_properties: property_map::empty(), locked: true }
         } else {
             table::remove(tokens, id)
         }
@@ -1870,6 +1947,7 @@ module aptopus::soulbound_token {
             creator,
             token_data_id,
             1,
+            false,
         );
 
         assert!(balance_of(signer::address_of(creator), token_id) == 3, 1);
@@ -2544,11 +2622,13 @@ module aptopus::soulbound_token {
             id: _,
             amount: _,
             token_properties: _,
+            locked: _,
         } = split_token;
         let Token {
             id: _,
             amount: _,
             token_properties: _,
+            locked: _,
         } = token;
     }
 
@@ -2644,4 +2724,3 @@ module aptopus::soulbound_token {
         abort 0
     }
 }
-
