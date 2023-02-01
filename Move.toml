@@ -1,0 +1,7 @@
+[package]
+name = "Aptopus"
+version = "0.0.0"
+
+[addresses]
+aptopus_address = "_"
+
