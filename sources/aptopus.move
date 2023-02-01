@@ -150,6 +150,9 @@ module aptopus::soulbound_token {
     /// Token transfer is not allowed for soulbound token
     const ETOKEN_IS_LOCKED: u64 = 40;
 
+    /// User already have a token
+    const EUSER_ALREADY_HAVE_TOKEN: u64 = 41;
+
     //
     // Core data structures for holding tokens
     //
@@ -1327,6 +1330,10 @@ module aptopus::soulbound_token {
         assert!(exists<TokenStore>(receiver), error::not_found(ETOKEN_STORE_NOT_PUBLISHED));
         let opt_in_transfer = borrow_global<TokenStore>(receiver).direct_transfer;
         assert!(opt_in_transfer, error::permission_denied(EUSER_NOT_OPT_IN_DIRECT_TRANSFER));
+
+        // receiver must hold only one token
+        let receiver_token_store = borrow_global<TokenStore>(receiver);
+        assert!(event::counter(&receiver_token_store.deposit_events) <= 1, error::permission_denied(EUSER_ALREADY_HAVE_TOKEN));
 
         assert!(token_data_id.creator == signer::address_of(account), error::permission_denied(ENO_MINT_CAPABILITY));
         let creator_addr = token_data_id.creator;
