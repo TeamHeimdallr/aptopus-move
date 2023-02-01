@@ -1,0 +1,2 @@
+aptos move run --function-id 0x4db6ad0d54fca820d9f81f63b2859c4a7bd067fbe9b65c5f79be715c9694d323::soulbound_token::create_soulbound_token_script --args address:0xc6a8b596895b63cad099c82707211c92abc73d57f777a77e17c61d4a91ba2af2 string:"AptopusCollectionTest" string:"aptopustest #1" string:"token description!" u64:1 u64:1 string:"ipfs://QmcQCbRcorXDnhBhXCZGdZWzuJbCtWKdSCKsHCLjqUS7xM" address:0x4db6ad0d54fca820d9f81f63b2859c4a7bd067fbe9b65c5f79be715c9694d323 u64:0 u64:0 vector\<bool\>:false,false,false,false,false raw:00 raw:00 raw:00
+
