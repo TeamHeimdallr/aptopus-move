@@ -1,7 +1,11 @@
-[package]
-name = "Aptopus"
 version = "0.0.0"
 
 [addresses]
-aptopus_address = "_"
+aptopus = "_"
+std = "0x1"
+aptos_framework = "0x1"
+
+[dependencies]
+MoveStdlib = { git = "https://github.com/aptos-labs/aptos-core.git", subdir = "aptos-move/framework/move-stdlib", rev = "a945db6" }
+AptosFramework = { git = "https://github.com/aptos-labs/aptos-core.git", subdir = "aptos-move/framework/aptos-framework", rev = "a945db6" }
 
